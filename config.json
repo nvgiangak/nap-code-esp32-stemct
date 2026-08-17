@@ -1,0 +1,45 @@
+{
+  "eyebrow": "Lớp học STEM",
+  "title": "Nạp code ESP32",
+  "subtitle": "Cắm bo mạch vào máy tính, chọn chương trình rồi bấm nạp. Không cần cài phần mềm.",
+  "footer": "Mở trang bằng Chrome, Edge hoặc Cốc Cốc trên máy tính. Điện thoại không nạp được.",
+  "defaultBaudrate": 115200,
+  "firmwares": [
+    {
+      "id": "led",
+      "name": "Đèn LED WS2812B",
+      "description": "Điều khiển dải đèn LED RGB nhiều hiệu ứng.",
+      "chip": "ESP32",
+      "flashMode": "keep",
+      "flashFreq": "keep",
+      "flashSize": "keep",
+      "parts": [
+        { "path": "firmware/led.bin", "offset": 0 }
+      ]
+    },
+    {
+      "id": "servo",
+      "name": "Điều khiển Servo",
+      "description": "Chương trình quay động cơ servo theo góc.",
+      "chip": "ESP32",
+      "flashMode": "keep",
+      "flashFreq": "keep",
+      "flashSize": "keep",
+      "parts": [
+        { "path": "firmware/servo.bin", "offset": 0 }
+      ]
+    },
+    {
+      "id": "oled",
+      "name": "Màn hình OLED",
+      "description": "Hiển thị chữ và hình lên màn hình OLED.",
+      "chip": "ESP32",
+      "flashMode": "keep",
+      "flashFreq": "keep",
+      "flashSize": "keep",
+      "parts": [
+        { "path": "firmware/oled.bin", "offset": 0 }
+      ]
+    }
+  ]
+}
