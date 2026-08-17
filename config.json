@@ -14,7 +14,10 @@
       "flashFreq": "keep",
       "flashSize": "keep",
       "parts": [
-        { "path": "firmware/led.bin", "offset": 0 }
+        {
+          "path": "firmware/led.bin",
+          "offset": 0
+        }
       ]
     },
     {
@@ -26,7 +29,10 @@
       "flashFreq": "keep",
       "flashSize": "keep",
       "parts": [
-        { "path": "firmware/servo.bin", "offset": 0 }
+        {
+          "path": "firmware/servo.bin",
+          "offset": 0
+        }
       ]
     },
     {
@@ -38,7 +44,40 @@
       "flashFreq": "keep",
       "flashSize": "keep",
       "parts": [
-        { "path": "firmware/oled.bin", "offset": 0 }
+        {
+          "path": "firmware/oled.bin",
+          "offset": 0
+        }
+      ]
+    },
+    {
+      "id": "test_r503",
+      "name": "TEST_R503",
+      "description": "",
+      "chip": "ESP32",
+      "flashMode": "keep",
+      "flashFreq": "keep",
+      "flashSize": "keep",
+      "parts": [
+        {
+          "path": "firmware/test_r503.bin",
+          "offset": 0
+        }
+      ]
+    },
+    {
+      "id": "demo_v1",
+      "name": "demo_v1",
+      "description": "",
+      "chip": "ESP32",
+      "flashMode": "keep",
+      "flashFreq": "keep",
+      "flashSize": "keep",
+      "parts": [
+        {
+          "path": "firmware/demo_v1.bin",
+          "offset": 0
+        }
       ]
     }
   ]

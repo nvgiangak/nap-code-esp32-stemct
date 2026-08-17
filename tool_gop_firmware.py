@@ -21,6 +21,7 @@ import queue
 import threading
 import subprocess
 from pathlib import Path
+from datetime import datetime
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -215,6 +216,159 @@ def cap_nhat_config_json(config_path, muc):
 
 
 # ----------------------------------------------------------------------------
+# GHI NHỚ CẤU HÌNH + ĐẨY LÊN GITHUB
+# ----------------------------------------------------------------------------
+
+CAI_DAT_FILE = Path.home() / ".esp32_gop_tool.json"
+
+
+def nap_cai_dat():
+    """Đọc cấu hình đã lưu (repo, thư mục, chip…). Trả về dict."""
+    try:
+        with open(CAI_DAT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def luu_cai_dat(moi):
+    """Ghi/cập nhật cấu hình (chỉ lưu giá trị khác rỗng)."""
+    try:
+        cur = nap_cai_dat()
+        cur.update({k: v for k, v in moi.items() if v})
+        with open(CAI_DAT_FILE, "w", encoding="utf-8") as f:
+            json.dump(cur, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+GIT_EXE = "git"   # sẽ được cập nhật thành đường dẫn đầy đủ nếu git không nằm trên PATH
+
+
+def _tim_git_exe():
+    """Tìm chương trình git: thử trên PATH trước, rồi các vị trí cài mặc định
+    của Git for Windows (phòng khi PATH chưa cập nhật sau khi vừa cài).
+    Trả về (đường_dẫn, chuỗi_phiên_bản) hoặc (None, None)."""
+    ung_vien = ["git"]
+    pf   = os.environ.get("ProgramFiles",      r"C:\Program Files")
+    pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    la   = os.environ.get("LOCALAPPDATA", "")
+    for base in (pf, pf86):
+        ung_vien.append(os.path.join(base, "Git", "cmd", "git.exe"))
+        ung_vien.append(os.path.join(base, "Git", "bin", "git.exe"))
+    if la:
+        ung_vien.append(os.path.join(la, "Programs", "Git", "cmd", "git.exe"))
+    for exe in ung_vien:
+        try:
+            r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return exe, r.stdout.strip()
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            continue
+    return None, None
+
+
+def phat_hien_git():
+    """Trả về chuỗi phiên bản git nếu tìm được (và ghi nhớ đường dẫn git), ngược lại None."""
+    global GIT_EXE
+    exe, ver = _tim_git_exe()
+    if exe:
+        GIT_EXE = exe
+        return ver
+    return None
+
+
+def chuan_hoa_url_github(url):
+    """Chuẩn hóa URL và tách (url, owner, repo). owner/repo có thể None nếu không nhận diện được."""
+    url = url.strip().rstrip("/")
+    m = re.search(r"github\.com[/:]+([^/]+)/([^/\s]+?)(?:\.git)?$", url)
+    if m:
+        return url, m.group(1), m.group(2)
+    return url, None, None
+
+
+def _git(args, cwd, timeout=180):
+    """Chạy một lệnh git (dùng GIT_EXE đã dò), không treo chờ nhập mật khẩu.
+    Trả về (returncode, output)."""
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        r = subprocess.run([GIT_EXE] + args, cwd=cwd, capture_output=True, text=True,
+                           env=env, timeout=timeout)
+        return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+    except FileNotFoundError:
+        return 127, "Không tìm thấy git."
+    except subprocess.TimeoutExpired:
+        return 124, "Quá thời gian chờ (có thể đang chờ đăng nhập)."
+
+
+def day_len_github(project_dir, url, branch, message, force, log):
+    """Đẩy toàn bộ project_dir lên repo GitHub.
+    log: hàm log(tag, msg). Trả về (thanh_cong, pages_url|None)."""
+    url_git, owner, repo = chuan_hoa_url_github(url)
+
+    if not Path(project_dir, ".git").exists():
+        rc, out = _git(["init"], project_dir)
+        if rc != 0:
+            log("err", "git init lỗi: " + out); return (False, None)
+        log("info", "Đã khởi tạo git cho thư mục dự án.")
+
+    # danh tính commit (đặt cục bộ nếu chưa có, để commit không lỗi)
+    rc, out = _git(["config", "user.email"], project_dir)
+    if not out:
+        _git(["config", "user.email", "esp32-tool@local"], project_dir)
+        _git(["config", "user.name", "ESP32 Tool"], project_dir)
+
+    # remote origin
+    rc, out = _git(["remote", "get-url", "origin"], project_dir)
+    if rc != 0:
+        _git(["remote", "add", "origin", url_git], project_dir)
+        log("info", "Đã gắn remote: " + url_git)
+    elif out != url_git:
+        _git(["remote", "set-url", "origin", url_git], project_dir)
+        log("info", "Đã đổi remote sang: " + url_git)
+
+    # .gitignore gọn để không đẩy file rác Python
+    gi = Path(project_dir, ".gitignore")
+    if not gi.exists():
+        try:
+            gi.write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    _git(["add", "-A"], project_dir)
+    rc, out = _git(["commit", "-m", message], project_dir)
+    if rc != 0 and "nothing to commit" in out.lower():
+        log("warn", "Không có thay đổi mới (vẫn thử đẩy phần chưa đẩy).")
+    elif rc != 0:
+        log("err", "git commit lỗi: " + out); return (False, None)
+    else:
+        log("ok", "Đã commit: " + message)
+
+    _git(["branch", "-M", branch], project_dir)
+
+    push = ["push", "-u", "origin", branch] + (["--force"] if force else [])
+    rc, out = _git(push, project_dir, timeout=300)
+    if rc != 0:
+        low = out.lower()
+        if "rejected" in low or "non-fast-forward" in low or "fetch first" in low:
+            log("err", "GitHub từ chối vì repo đã có nội dung khác.\n"
+                       "→ Tick “Ghi đè (force push)” rồi đẩy lại, HOẶC tạo repo TRỐNG (bỏ chọn Add README).")
+        elif any(k in low for k in ("authentication", "could not read", "terminal prompt",
+                                     "permission denied", "403", "fatal: could not")):
+            log("err", "Cần đăng nhập GitHub.\n"
+                       "→ Windows: cài Git for Windows (kèm Git Credential Manager); lần đẩy đầu sẽ hiện cửa sổ đăng nhập.\n"
+                       "→ Hoặc dùng Personal Access Token làm mật khẩu khi được hỏi.")
+        else:
+            log("err", "git push lỗi:\n" + out)
+        return (False, None)
+
+    log("ok", "Đẩy lên GitHub thành công.")
+    pages = ("https://%s.github.io/%s/" % (owner, repo)) if owner and repo else None
+    return (True, pages)
+
+
+# ----------------------------------------------------------------------------
 # GIAO DIỆN
 # ----------------------------------------------------------------------------
 
@@ -233,8 +387,10 @@ class App(tk.Tk):
         super().__init__()
         self.title("Công cụ gộp firmware ESP32")
         self.configure(bg=BG)
-        self.geometry("860x680")
-        self.minsize(760, 600)
+        self.geometry("900x780")
+        self.minsize(780, 620)
+
+        self.cai_dat = nap_cai_dat()
 
         self.esptool = None          # (lenh_goi, phien_ban)
         self.boot_app0 = tk.StringVar()
@@ -247,6 +403,13 @@ class App(tk.Tk):
         self.v_ten   = tk.StringVar()
         self.v_mota  = tk.StringVar()
         self.v_file  = tk.StringVar()
+
+        # cấu hình GitHub
+        self.repo_url   = tk.StringVar()
+        self.commit_msg = tk.StringVar()
+        self.branch     = tk.StringVar(value="main")
+        self.force_push = tk.BooleanVar(value=False)
+        self.dang_day   = False
 
         self.log_queue = queue.Queue()
         self.dang_chay = False
@@ -285,18 +448,46 @@ class App(tk.Tk):
 
     # ---- dựng widget ----
     def _dung_giao_dien(self):
-        pad = dict(padx=12, pady=6)
+        # style cho Notebook
+        st = ttk.Style(self)
+        st.configure("TNotebook", background=BG, borderwidth=0)
+        st.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=(16, 8))
+        st.map("TNotebook.Tab", background=[("selected", "#22345c")], foreground=[("selected", FG)])
 
         head = ttk.Frame(self)
-        head.pack(fill="x", **pad)
+        head.pack(fill="x", padx=12, pady=(10, 4))
         ttk.Label(head, text="Công cụ gộp firmware ESP32", style="Head.TLabel").pack(anchor="w")
         ttk.Label(head, style="Muted.TLabel",
-                  text="Gộp bootloader + phân vùng + boot_app0 + chương trình → 1 file .bin nạp tại 0x0."
+                  text="Gộp firmware thành 1 file .bin (nạp tại 0x0) rồi đẩy cả dự án lên GitHub."
                   ).pack(anchor="w")
 
-        # Cấu hình chung ------------------------------------------------------
-        cfg = ttk.Frame(self, style="Panel.TFrame")
-        cfg.pack(fill="x", **pad)
+        # ==== Khung log dùng chung (đặt dưới cùng trước, để Notebook giãn phía trên) ====
+        khung_log = ttk.Frame(self, style="Panel.TFrame")
+        khung_log.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
+        thanh = ttk.Frame(self); thanh.pack(side="bottom", fill="x", padx=12, pady=(4, 0))
+        self.lbl_trang_thai = ttk.Label(thanh, text="", style="Muted.TLabel")
+        self.lbl_trang_thai.pack(side="left")
+
+        self.txt = tk.Text(khung_log, height=5, bg="#0b1424", fg="#cfe0f5", insertbackground=FG,
+                           relief="flat", wrap="word", font=("Consolas", 9))
+        self.txt.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        sb2 = ttk.Scrollbar(khung_log, orient="vertical", command=self.txt.yview)
+        sb2.pack(side="left", fill="y", pady=8)
+        self.txt.configure(yscrollcommand=sb2.set, state="disabled")
+        self.txt.tag_configure("ok", foreground=OKC)
+        self.txt.tag_configure("err", foreground=ERRC)
+        self.txt.tag_configure("warn", foreground=WARN)
+        self.txt.tag_configure("info", foreground="#9fd0ff")
+
+        # ==== Notebook 2 tab ====
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=12, pady=6)
+        tab1 = ttk.Frame(nb); nb.add(tab1, text="①  Gộp firmware")
+        tab2 = ttk.Frame(nb); nb.add(tab2, text="②  Đẩy lên GitHub")
+
+        # ---------- TAB 1: GỘP FIRMWARE ----------
+        cfg = ttk.Frame(tab1, style="Panel.TFrame")
+        cfg.pack(fill="x", padx=4, pady=6)
         for i in range(4):
             cfg.columnconfigure(i, weight=(1 if i in (1, 3) else 0))
 
@@ -320,81 +511,109 @@ class App(tk.Tk):
         ttk.Checkbutton(cfg, text="Tự cập nhật config.json (ở thư mục cha của firmware/)",
                         variable=self.cap_nhat_config).grid(row=3, column=0, columnspan=4, sticky="w", padx=8, pady=(0, 8))
 
-        # Danh sách chương trình ---------------------------------------------
-        ttk.Label(self, text="Danh sách chương trình", style="Head.TLabel").pack(anchor="w", padx=12, pady=(8, 0))
-        khung_ds = ttk.Frame(self, style="Panel.TFrame")
-        khung_ds.pack(fill="both", expand=True, padx=12, pady=6)
-
+        ttk.Label(tab1, text="Danh sách chương trình", style="Head.TLabel").pack(anchor="w", padx=4, pady=(6, 0))
+        khung_ds = ttk.Frame(tab1, style="Panel.TFrame")
+        khung_ds.pack(fill="x", padx=4, pady=6)
         cols = ("ten", "file", "build")
-        self.tree = ttk.Treeview(khung_ds, columns=cols, show="headings", height=6, selectmode="browse")
+        self.tree = ttk.Treeview(khung_ds, columns=cols, show="headings", height=4, selectmode="browse")
         self.tree.heading("ten", text="Tên hiển thị")
         self.tree.heading("file", text="File xuất")
         self.tree.heading("build", text="Thư mục build")
         self.tree.column("ten", width=200)
-        self.tree.column("file", width=130)
-        self.tree.column("build", width=440)
-        self.tree.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
+        self.tree.column("file", width=120)
+        self.tree.column("build", width=430)
+        self.tree.pack(side="left", fill="x", expand=True, padx=(8, 0), pady=8)
         sb = ttk.Scrollbar(khung_ds, orient="vertical", command=self.tree.yview)
         sb.pack(side="left", fill="y", pady=8)
         self.tree.configure(yscrollcommand=sb.set)
-
-        hang_nut = ttk.Frame(self)
-        hang_nut.pack(fill="x", padx=12)
-        ttk.Button(hang_nut, text="🗑 Xóa dòng đang chọn", command=self._xoa_dong).pack(side="left")
-
-        # dữ liệu ẩn cho từng dòng: iid -> dict
         self.du_lieu_dong = {}
 
-        # Khu vực thêm chương trình ------------------------------------------
-        them = ttk.Frame(self, style="Panel.TFrame")
-        them.pack(fill="x", padx=12, pady=6)
+        hang_nut = ttk.Frame(tab1)
+        hang_nut.pack(fill="x", padx=4)
+        ttk.Button(hang_nut, text="🗑 Xóa dòng đang chọn", command=self._xoa_dong).pack(side="left")
+
+        them = ttk.Frame(tab1, style="Panel.TFrame")
+        them.pack(fill="x", padx=4, pady=6)
         them.columnconfigure(1, weight=1)
         them.columnconfigure(3, weight=1)
-
         ttk.Label(them, text="Thư mục build:", background=PANEL).grid(row=0, column=0, sticky="w", padx=8, pady=6)
         ttk.Entry(them, textvariable=self.v_build).grid(row=0, column=1, columnspan=2, sticky="ew", padx=8)
         ttk.Button(them, text="Duyệt…", command=self._duyet_build).grid(row=0, column=3, sticky="e", padx=8)
-
         ttk.Label(them, text="Tên hiển thị:", background=PANEL).grid(row=1, column=0, sticky="w", padx=8, pady=6)
         ttk.Entry(them, textvariable=self.v_ten).grid(row=1, column=1, sticky="ew", padx=8)
         ttk.Label(them, text="Tên file xuất:", background=PANEL).grid(row=1, column=2, sticky="e", padx=8)
         ttk.Entry(them, textvariable=self.v_file, width=18).grid(row=1, column=3, sticky="w", padx=8)
-
         ttk.Label(them, text="Mô tả (tùy chọn):", background=PANEL).grid(row=2, column=0, sticky="w", padx=8, pady=6)
         ttk.Entry(them, textvariable=self.v_mota).grid(row=2, column=1, columnspan=2, sticky="ew", padx=8)
         ttk.Button(them, text="➕ Thêm vào danh sách", command=self._them_chuong_trinh).grid(row=2, column=3, sticky="e", padx=8)
 
-        # Nút chạy + log ------------------------------------------------------
-        thanh = ttk.Frame(self); thanh.pack(fill="x", padx=12, pady=(8, 4))
-        self.btn_gop = ttk.Button(thanh, text="Gộp tất cả", style="Accent.TButton", command=self._bat_dau_gop)
+        thanh_gop = ttk.Frame(tab1); thanh_gop.pack(fill="x", padx=4, pady=(8, 6))
+        self.btn_gop = ttk.Button(thanh_gop, text="Gộp tất cả", style="Accent.TButton", command=self._bat_dau_gop)
         self.btn_gop.pack(side="left")
-        self.lbl_trang_thai = ttk.Label(thanh, text="", style="Muted.TLabel")
-        self.lbl_trang_thai.pack(side="left", padx=12)
+        ttk.Label(thanh_gop, style="Muted.TLabel",
+                  text="→ Sau khi gộp xong, sang tab ② để đẩy lên GitHub."
+                  ).pack(side="left", padx=12)
 
-        khung_log = ttk.Frame(self, style="Panel.TFrame")
-        khung_log.pack(fill="both", expand=True, padx=12, pady=(4, 12))
-        self.txt = tk.Text(khung_log, height=8, bg="#0b1424", fg="#cfe0f5", insertbackground=FG,
-                           relief="flat", wrap="word", font=("Consolas", 9))
-        self.txt.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        sb2 = ttk.Scrollbar(khung_log, orient="vertical", command=self.txt.yview)
-        sb2.pack(side="left", fill="y", pady=8)
-        self.txt.configure(yscrollcommand=sb2.set, state="disabled")
-        self.txt.tag_configure("ok", foreground=OKC)
-        self.txt.tag_configure("err", foreground=ERRC)
-        self.txt.tag_configure("warn", foreground=WARN)
-        self.txt.tag_configure("info", foreground="#9fd0ff")
+        # ---------- TAB 2: ĐẨY LÊN GITHUB ----------
+        gh = ttk.Frame(tab2, style="Panel.TFrame")
+        gh.pack(fill="x", padx=4, pady=6)
+        gh.columnconfigure(1, weight=1)
+        ttk.Label(gh, background=PANEL, foreground=MUTED,
+                  text="Đẩy cả thư mục dự án (thư mục cha của firmware/) lên repo GitHub, giữ nguyên cấu trúc.\n"
+                       "Nhập URL repo rồi bấm nút. Lần đẩy đầu có thể hiện cửa sổ đăng nhập GitHub."
+                  ).grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(8, 4))
+
+        ttk.Label(gh, text="URL repo:", background=PANEL).grid(row=1, column=0, sticky="w", padx=8, pady=(6, 2))
+        ttk.Entry(gh, textvariable=self.repo_url).grid(row=1, column=1, columnspan=3, sticky="ew", padx=8, pady=(6, 2))
+        ttk.Label(gh, text="ví dụ:  https://github.com/tencuaban/ten-repo", background=PANEL, foreground=MUTED).grid(
+            row=2, column=1, columnspan=3, sticky="w", padx=8)
+
+        ttk.Label(gh, text="Lời commit:", background=PANEL).grid(row=3, column=0, sticky="w", padx=8, pady=(8, 2))
+        ttk.Entry(gh, textvariable=self.commit_msg).grid(row=3, column=1, sticky="ew", padx=8, pady=(8, 2))
+        ttk.Label(gh, text="Nhánh:", background=PANEL).grid(row=3, column=2, sticky="e", padx=8)
+        ttk.Entry(gh, textvariable=self.branch, width=10).grid(row=3, column=3, sticky="w", padx=8)
+
+        khung_gh = ttk.Frame(gh, style="Panel.TFrame")
+        khung_gh.grid(row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(10, 10))
+        self.btn_day = ttk.Button(khung_gh, text="⬆ Đẩy lên GitHub", style="Accent.TButton", command=self._bat_dau_day)
+        self.btn_day.pack(side="left")
+        ttk.Checkbutton(khung_gh, text="Ghi đè (force push)", variable=self.force_push).pack(side="left", padx=12)
+
+        huong_dan = (
+            "Cách làm nhanh cho dự án mới:\n"
+            "1. Tạo repo TRỐNG trên GitHub (bỏ chọn Add README).\n"
+            "2. Dán URL repo vào ô trên, bấm “Đẩy lên GitHub”.\n"
+            "3. Trên GitHub: Settings → Pages → Deploy from a branch → main → /(root) → Save.\n"
+            "Lần sau chỉ cần đổi file rồi bấm đẩy lại (tool nhớ sẵn URL). "
+            "Nếu repo đã có nội dung khác và bị từ chối, tick “Ghi đè”."
+        )
+        ttk.Label(tab2, text=huong_dan, style="Muted.TLabel", justify="left").pack(anchor="w", padx=8, pady=8)
 
     # ---- khởi tạo mặc định ----
     def _mac_dinh_ban_dau(self):
-        self._cap_nhat_nhan_offset()
-
         # thư mục firmware/ mặc định: cạnh file script hoặc trong thư mục hiện tại
         goc = Path(__file__).resolve().parent
         ung_vien = [goc / "firmware", Path.cwd() / "firmware"]
         dat = next((p for p in ung_vien if p.exists()), ung_vien[0])
         self.thu_muc_dich.set(str(dat))
 
-        # tự tìm boot_app0
+        # áp cấu hình đã lưu lần trước (nếu có) — tăng tốc cho lần sau
+        cd = self.cai_dat
+        if cd.get("chip") in BOOTLOADER_OFFSET:
+            self.chip.set(cd["chip"])
+        if cd.get("thu_muc_dich"):
+            self.thu_muc_dich.set(cd["thu_muc_dich"])
+        if cd.get("boot_app0"):
+            self.boot_app0.set(cd["boot_app0"])
+        if cd.get("repo_url"):
+            self.repo_url.set(cd["repo_url"])
+        if cd.get("branch"):
+            self.branch.set(cd["branch"])
+        self.commit_msg.set("Cập nhật %s" % datetime.now().strftime("%d/%m/%Y %H:%M"))
+
+        self._cap_nhat_nhan_offset()
+
+        # tự tìm esptool + boot_app0 (chạy nền)
         self._log("Đang dò tìm esptool và boot_app0.bin…", "info")
         threading.Thread(target=self._khoi_tao_nen, daemon=True).start()
 
@@ -407,10 +626,10 @@ class App(tk.Tk):
             self.log_queue.put(("err", "CHƯA thấy esptool. Hãy cài bằng lệnh:  pip install esptool"))
 
         ba0 = tim_boot_app0()
-        if ba0:
+        if ba0 and not self.boot_app0.get().strip():
             self.boot_app0.set(ba0)
             self.log_queue.put(("ok", "Đã tìm thấy boot_app0.bin:\n  %s" % ba0))
-        else:
+        elif not self.boot_app0.get().strip():
             self.log_queue.put(("warn", "Chưa tự tìm được boot_app0.bin — hãy bấm “Duyệt…” để chọn, "
                                         "hoặc để trống nếu sơ đồ phân vùng của bạn không dùng file này."))
 
@@ -432,6 +651,8 @@ class App(tk.Tk):
                 tag, msg = self.log_queue.get_nowait()
                 if tag == "__done__":
                     self._ket_thuc_gop(msg)
+                elif tag == "__done_day__":
+                    self._ket_thuc_day(msg)
                 else:
                     self._log(msg, tag)
         except queue.Empty:
@@ -536,6 +757,9 @@ class App(tk.Tk):
             messagebox.showwarning("boot_app0 không hợp lệ", "Đường dẫn boot_app0.bin không tồn tại.")
             return
 
+        # ghi nhớ cấu hình cho lần sau
+        luu_cai_dat({"chip": self.chip.get(), "thu_muc_dich": thu_muc_dich, "boot_app0": boot_app0})
+
         # gom công việc theo thứ tự trong bảng
         cong_viec = [self.du_lieu_dong[iid] for iid in self.tree.get_children("")]
 
@@ -600,9 +824,78 @@ class App(tk.Tk):
         self.dang_chay = False
         self.btn_gop.config(state="normal")
         self.lbl_trang_thai.config(text="")
-        tag = "ok" if msg.startswith("Hoàn tất: %d" % len(self.tree.get_children(""))) else "info"
         self._log("─" * 48, "info")
         self._log(msg, "ok")
+
+    # ---- đẩy lên GitHub ----
+    def _bat_dau_day(self):
+        if self.dang_day:
+            return
+        url = self.repo_url.get().strip()
+        if not url:
+            messagebox.showwarning("Thiếu URL", "Hãy nhập URL repo GitHub, ví dụ:\n"
+                                                "https://github.com/tencuaban/ten-repo")
+            return
+        if not phat_hien_git():
+            messagebox.showerror(
+                "Chưa dò được Git",
+                "Không tìm thấy Git.\n\n"
+                "• Nếu bạn VỪA cài Git: hãy ĐÓNG HẲN tool này rồi mở lại — hoặc khởi động lại máy — "
+                "để Windows nhận Git.\n"
+                "• Khi cài Git, ở bước chọn PATH hãy để mặc định "
+                "“Git from the command line and also from 3rd-party software”.\n"
+                "• Nếu chưa cài: tải Git for Windows tại https://git-scm.com/download/win.")
+            return
+        thu_muc_dich = self.thu_muc_dich.get().strip()
+        if not thu_muc_dich:
+            messagebox.showwarning("Thiếu thư mục", "Hãy chọn thư mục firmware/ để tool biết thư mục dự án "
+                                                    "(là thư mục cha của firmware/).")
+            return
+        project_dir = Path(thu_muc_dich).parent
+        if not (project_dir / "index.html").exists():
+            if not messagebox.askyesno("Xác nhận",
+                    "Không thấy index.html trong thư mục dự án:\n%s\n\n"
+                    "Bạn có chắc đây là thư mục dự án cần đẩy không?" % project_dir):
+                return
+
+        branch = self.branch.get().strip() or "main"
+        msg = self.commit_msg.get().strip() or ("Cập nhật %s" % datetime.now().strftime("%d/%m/%Y %H:%M"))
+        force = self.force_push.get()
+
+        luu_cai_dat({"repo_url": url, "branch": branch, "thu_muc_dich": thu_muc_dich,
+                     "chip": self.chip.get(), "boot_app0": self.boot_app0.get().strip()})
+
+        self.dang_day = True
+        self.btn_day.config(state="disabled")
+        self.lbl_trang_thai.config(text="Đang đẩy lên GitHub…")
+        self._log("─" * 48, "info")
+        self._log("Đang đẩy thư mục dự án: %s" % project_dir, "info")
+        threading.Thread(target=self._chay_day_nen,
+                         args=(str(project_dir), url, branch, msg, force), daemon=True).start()
+
+    def _chay_day_nen(self, project_dir, url, branch, msg, force):
+        def log(tag, m):
+            self.log_queue.put((tag, m))
+        try:
+            ok, pages = day_len_github(project_dir, url, branch, msg, force, log)
+        except Exception as e:
+            self.log_queue.put(("err", "Lỗi khi đẩy: %s" % e))
+            ok, pages = False, None
+        if ok and pages:
+            self.log_queue.put(("ok", "Trang của bạn (sau khi bật Pages): %s" % pages))
+            self.log_queue.put(("info", "Nếu là repo mới: vào Settings → Pages → Deploy from a branch "
+                                        "→ %s → /(root) → Save." % branch))
+        self.log_queue.put(("__done_day__", "OK" if ok else "LỖI"))
+
+    def _ket_thuc_day(self, trang_thai):
+        self.dang_day = False
+        self.btn_day.config(state="normal")
+        self.lbl_trang_thai.config(text="")
+        self._log("─" * 48, "info")
+        if trang_thai == "OK":
+            self._log("✓ Đã đẩy xong.", "ok")
+        else:
+            self._log("✗ Đẩy chưa thành công — xem thông báo phía trên.", "err")
 
 
 if __name__ == "__main__":

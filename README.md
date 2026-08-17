@@ -41,7 +41,11 @@ Bạn chỉ cần đụng tới **`config.json`** và thư mục **`firmware/`**
 
 Có 2 cách. **Cách A dễ thành công nhất cho học sinh**, kể cả với bo mới tinh.
 
-> 💡 **Có công cụ tự động:** để khỏi gõ lệnh thủ công cho từng chương trình, chạy `python tool_gop_firmware.py` (cần `pip install esptool`). Tool có giao diện: bạn chỉ trỏ vào thư mục build của từng sketch, chọn dòng chip, nó tự tìm file, tự gộp và xuất thẳng vào `firmware/`, đồng thời cập nhật luôn `config.json`. Phần bên dưới giải thích cách làm thủ công để bạn hiểu bản chất.
+> 💡 **Có công cụ tự động (`tool_gop_firmware.py`):** để khỏi gõ lệnh thủ công, chạy `python tool_gop_firmware.py` (cần `pip install esptool` và Git). Tool có 2 tab:
+> - **Tab ① Gộp firmware:** trỏ vào thư mục build của từng sketch, chọn dòng chip → tool tự tìm file, tự gộp, xuất thẳng vào `firmware/` và cập nhật `config.json`.
+> - **Tab ② Đẩy lên GitHub:** dán URL repo → tool tự `git init/commit/push` cả dự án lên GitHub (giữ nguyên cấu trúc thư mục).
+>
+> Tool nhớ sẵn cấu hình (repo, chip, thư mục) cho lần sau. Phần bên dưới giải thích cách làm thủ công để bạn hiểu bản chất.
 
 ### Cách A — File gộp (merged), nạp tại `0x0` ✅ khuyên dùng
 
@@ -130,8 +134,10 @@ Bạn cũng có thể đổi các dòng ở đầu file: `title`, `subtitle`, `e
 
 ## 5. Đưa lên GitHub Pages
 
-1. Tạo repository mới trên GitHub (ví dụ `nap-code-esp32`).
-2. Tải toàn bộ các file trong thư mục này lên repo (kéo–thả trên web hoặc dùng git).
+> ⚡ **Nhanh nhất:** dùng tab ② của `tool_gop_firmware.py` — dán URL repo, bấm nút là tool tự đẩy cả dự án lên (giữ nguyên cấu trúc). Khi đó bạn chỉ cần làm bước 1 và 3–7 dưới đây một lần cho repo mới.
+
+1. Tạo repository mới trên GitHub (ví dụ `nap-code-esp32`). Nếu định dùng tool để đẩy, hãy tạo repo **TRỐNG** (bỏ chọn Add README).
+2. Tải toàn bộ các file trong thư mục này lên repo (kéo–thả trên web hoặc dùng git). *(Bỏ qua bước này nếu đã dùng tool để đẩy.)*
 3. Vào **Settings → Pages**.
 4. Mục **Build and deployment → Source**: chọn **Deploy from a branch**.
 5. Chọn nhánh **main** và thư mục **/ (root)**, bấm **Save**.
